@@ -1,0 +1,118 @@
+*&---------------------------------------------------------------------*
+*& Include ZF2S_SSCC_LABEL_RM_EXT_MR                                   *
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*& DD ID        :                                                      *
+*& FS ID        :                                                      *
+*& User Stories :EWOW-58114                                            *
+*& Work Item    :2000004271                                            *
+*&---------------------------------------------------------------------*
+*& Warehouse HU label for raw materials and externally procured Mother *
+*& Reels                                                               *
+*&---------------------------------------------------------------------*
+*& Transport:  DA2K925844                                              *
+*&---------------------------------------------------------------------*
+*& Change Log:                                                         *
+*&---------------------------------------------------------------------*
+*& Author      ¦ Date           ¦ Comment                              *
+*&---------------------------------------------------------------------*
+*& DEHBHRA      29-NOV-2023      Initial                               *
+*&---------------------------------------------------------------------*
+
+DATA : lt_hu     TYPE hum_exidv_t,
+       lt_header TYPE hum_hu_header_t,
+       lt_item   TYPE hum_hu_item_t.
+CONSTANTS : lc_multi  TYPE string VALUE 'Multi Batch Colli',
+            lc_margin TYPE string VALUE  '2mm'.
+
+DATA(lv_fnc1) = '[F1]'.
+IF is_ean128-exidv IS NOT INITIAL.
+  APPEND INITIAL LINE TO lt_hu ASSIGNING FIELD-SYMBOL(<ls_hu>).
+  <ls_hu>-exidv = is_ean128-exidv.
+  gs_data-sscctxt = |{ is_ean128-exidv+2 }|.      " Handling unit
+ENDIF.
+gs_data-articlename = is_ean128-maktx.            " Material description
+gs_data-articleno = is_ean128-matnr.              " Material number
+gs_data-articleno = | { gs_data-articleno ALPHA = OUT } |.
+IF  lt_hu IS  NOT INITIAL.
+  CALL FUNCTION 'HU_GET_HUS'
+    EXPORTING
+      it_hus      = lt_hu
+    IMPORTING
+      et_header   = lt_header
+      et_items    = lt_item
+    EXCEPTIONS
+      hus_locked  = 1
+      no_hu_found = 2
+      fatal_error = 3
+      OTHERS      = 4.
+  IF sy-subrc = 0.
+
+    DATA(ls_header) = VALUE #( lt_header[ 1 ] OPTIONAL ).
+    DATA(ls_item) = VALUE #( lt_item[ 1 ] OPTIONAL ).
+    DATA(lv_item) = lines( lt_item ).
+    SELECT SINGLE vbeln,
+         posnr,
+         erdat,
+         hsdat
+    FROM lips
+    INTO @DATA(ls_lips)
+    WHERE vbeln = @ls_item-vbeln
+      AND posnr = @ls_item-posnr.
+    IF sy-subrc <> 0.
+      CLEAR ls_lips.
+    ENDIF.
+    IF ls_lips-hsdat IS NOT INITIAL.
+      gs_data-grdate = |{ ls_lips-hsdat+0(4) }-{ ls_lips-hsdat+4(2) }-{ ls_lips-hsdat+6(2) }|.
+    ELSE.
+      " gs_data-grdate = |{ ls_lips-erdat+0(4) }-{ ls_lips-erdat+4(2) }-{ ls_lips-erdat+6(2) }|.
+      gs_data-grdate = |{ ls_header-erdat+0(4) }-{ ls_header-erdat+4(2) }-{ ls_header-erdat+6(2) }|.
+    ENDIF.
+
+    IF lt_item IS NOT INITIAL.
+      SELECT matnr,
+             xchpf
+        FROM mara
+        INTO TABLE @DATA(lt_mara)
+        FOR ALL ENTRIES IN @lt_item
+        WHERE matnr = @lt_item-matnr.
+      IF sy-subrc = 0.
+        IF line_exists( lt_mara[ matnr = is_ean128-matnr xchpf = abap_true ] ).
+          gs_data-grossweight = |{ ls_header-brgew DECIMALS = 0 } { ls_header-gewei }|.
+          IF NOT lv_item > 1.
+            gs_data-batchnotxt = ls_item-charg.
+          ELSE.
+            gs_data-batchnotxt = lc_multi.
+          ENDIF.
+        ELSE.
+          gs_data-grossweight = |{ ls_item-vemng DECIMALS = 0 } { ls_item-vemeh }|.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+ENDIF.
+" determination of HU number barcode
+gs_data-ssccbarcode = |{ lv_fnc1 }00{ gs_data-sscctxt }|.           " Barcode 3
+
+gs_data-ssccbartxt = |(00){ gs_data-sscctxt } |.
+
+ls_item-matnr = |{ ls_item-matnr ALPHA = OUT }|.
+
+" determination of material barcode
+gs_data-matbarcode = |{ lv_fnc1 }93{ ls_item-matnr }{ lv_fnc1 }30{ gs_data-grossweight } |.  " Barcode one
+
+gs_data-matbartxt = |(93){ ls_item-matnr } (30){ gs_data-grossweight } |.
+
+" determination of batch barcode
+IF gs_data-batchnotxt NE lc_multi AND gs_data-batchnotxt IS NOT INITIAL.
+  gs_data-batchbarcode = |{ lv_fnc1 }10{ gs_data-batchnotxt } |.
+  gs_data-batbartext = |(10){ gs_data-batchnotxt } |.
+ENDIF.
+
+*the Barcode Margin to set in the Form layout
+gv_bc1l = gs_data-lv_bc1l = gv_bc2l = gv_bc3l = lc_margin.
+gs_data-fg_bc3l = gv_bc3l.
+gs_data-fg_bc2l = gv_bc2l.
+gs_data-fg_bc1l = gv_bc1l.
+APPEND gs_data TO gt_data.
+CLEAR:gs_data.
